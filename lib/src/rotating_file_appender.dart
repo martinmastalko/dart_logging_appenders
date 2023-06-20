@@ -2,11 +2,14 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:clock/clock.dart';
+import 'package:intl/intl.dart';
 import 'package:logging/logging.dart';
 import 'package:logging_appenders/src/base_appender.dart';
 import 'package:logging_appenders/src/internal/dummy_logger.dart';
 import 'package:logging_appenders/src/logrecord_formatter.dart';
 import 'package:meta/meta.dart';
+
+enum RotationPeriod { minute, hour, day, week, month, disabled }
 
 final _logger = DummyLogger('logging_appenders.rotating_file_appender');
 
@@ -22,6 +25,7 @@ class RotatingFileAppender extends BaseLogAppender {
     required this.baseFilePath,
     this.keepRotateCount = 3,
     this.rotateAtSizeBytes = 10 * 1024 * 1024,
+    this.rotateEvery = RotationPeriod.disabled,
     this.rotateCheckInterval = const Duration(minutes: 5),
     this.clock = const Clock(),
   }) : super(formatter) {
@@ -30,6 +34,29 @@ class RotatingFileAppender extends BaseLogAppender {
       throw StateError(
           'When initializing file logger, ${_outputFile.parent} must exist.');
     }
+
+    switch (rotateEvery) {
+      case RotationPeriod.disabled:
+        break;
+      case RotationPeriod.minute:
+        _timestampFormatter = DateFormat("yyyyMMddHm");
+        _periodTimestampFormatter = DateFormat("yyyyMMddTHm00");
+        break;
+      case RotationPeriod.hour:
+        _timestampFormatter = DateFormat("yyyyMMddH");
+        _periodTimestampFormatter = DateFormat("yyyyMMddTH0000");
+        break;
+      case RotationPeriod.day:
+      case RotationPeriod.week:
+        _timestampFormatter = DateFormat("yyyyMMdd");
+        _periodTimestampFormatter = DateFormat("yyyyMMddT000000");
+        break;
+      case RotationPeriod.month:
+        _timestampFormatter = DateFormat("yyyyMM");
+        _periodTimestampFormatter = DateFormat("yyyyMM01T000000");
+        break;
+    }
+
     _maybeRotate();
   }
 
@@ -46,6 +73,7 @@ class RotatingFileAppender extends BaseLogAppender {
   /// The size in bytes we allow a file to grow before rotating it.
   final int rotateAtSizeBytes;
   final Duration rotateCheckInterval;
+  final RotationPeriod rotateEvery;
 
   /// how long to keep log file open. will be closed once this duration
   /// passed without a log message.
@@ -57,6 +85,8 @@ class RotatingFileAppender extends BaseLogAppender {
   late File _outputFile;
   IOSink? _outputFileSink;
   Timer? _closeAndFlushTimer;
+  DateFormat? _timestampFormatter;
+  DateFormat? _periodTimestampFormatter;
 
   /// Returns all available rotated logs, starting from the most current one.
   List<File> getAllLogFiles() =>
@@ -104,14 +134,20 @@ class RotatingFileAppender extends BaseLogAppender {
     _maybeRotate();
   }
 
-  String _fileNameForRotation(int rotation) =>
-      rotation == 0 ? baseFilePath : '$baseFilePath.$rotation';
+  String _fileNameForRotation(int rotation) => rotation == 0
+      ? '$baseFilePath${_getTimestamp()}'
+      : '$baseFilePath${_getTimestamp()}.$rotation';
+
+  String _getTimestamp() => _timestampFormatter != null
+      ? '.${_timestampFormatter!.format(clock.now())}'
+      : '';
 
   /// rotates the file, if it is larger than [rotateAtSizeBytes]
   Future<bool> _maybeRotate() async {
     if (_nextRotateCheck?.isAfter(clock.now()) != false) {
       return false;
     }
+
     _nextRotateCheck = null;
     try {
       try {
@@ -152,7 +188,14 @@ class RotatingFileAppender extends BaseLogAppender {
       await flushFuture;
       return true;
     } finally {
+      var nextRotationPeriodCheck = DateTime.tryParse(
+          _periodTimestampFormatter?.format(clock.now()) ?? "");
       _nextRotateCheck = clock.now().add(rotateCheckInterval);
+
+      if (_nextRotateCheck != null &&
+          (nextRotationPeriodCheck?.isBefore(_nextRotateCheck!) ?? false)) {
+        _nextRotateCheck = nextRotationPeriodCheck;
+      }
     }
   }
 
