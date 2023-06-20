@@ -10,4 +10,4 @@ export 'src/print_appender.dart' show PrintAppender;
 export 'src/remote/logzio_appender.dart' show LogzIoApiAppender;
 export 'src/remote/loki_appender.dart' show LokiApiAppender;
 export 'src/rotating_file_appender.dart'
-    show AsyncInitializingLogHandler, RotatingFileAppender;
+    show AsyncInitializingLogHandler, RotatingFileAppender, RotationPeriod;
