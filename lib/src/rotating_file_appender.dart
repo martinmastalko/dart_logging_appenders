@@ -9,7 +9,7 @@ import 'package:logging_appenders/src/internal/dummy_logger.dart';
 import 'package:logging_appenders/src/logrecord_formatter.dart';
 import 'package:meta/meta.dart';
 
-enum RotationPeriod { minute, hour, day, week, month, disabled }
+enum RotationPeriod { minute, hour, day, week, disabled }
 
 final _logger = DummyLogger('logging_appenders.rotating_file_appender');
 
@@ -29,32 +29,35 @@ class RotatingFileAppender extends BaseLogAppender {
     this.rotateCheckInterval = const Duration(minutes: 5),
     this.clock = const Clock(),
   }) : super(formatter) {
-    _outputFile = File(baseFilePath);
-    if (!_outputFile.parent.existsSync()) {
-      throw StateError(
-          'When initializing file logger, ${_outputFile.parent} must exist.');
-    }
-
     switch (rotateEvery) {
       case RotationPeriod.disabled:
         break;
       case RotationPeriod.minute:
-        _timestampFormatter = DateFormat("yyyyMMddHm");
-        _periodTimestampFormatter = DateFormat("yyyyMMddTHm00");
+        _timestampFormatter = DateFormat("yyyyMMddHHmm");
+        _periodTimestampFormatter = DateFormat("yyyyMMddTHHm00");
+        _periodRotationCheckDuration = Duration(minutes: 1);
         break;
       case RotationPeriod.hour:
-        _timestampFormatter = DateFormat("yyyyMMddH");
-        _periodTimestampFormatter = DateFormat("yyyyMMddTH0000");
+        _timestampFormatter = DateFormat("yyyyMMddHH");
+        _periodTimestampFormatter = DateFormat("yyyyMMddTHH0000");
+        _periodRotationCheckDuration = Duration(hours: 1);
         break;
       case RotationPeriod.day:
+        _timestampFormatter = DateFormat("yyyyMMdd");
+        _periodTimestampFormatter = DateFormat("yyyyMMddT000000");
+        _periodRotationCheckDuration = Duration(days: 1);
+        break;
       case RotationPeriod.week:
         _timestampFormatter = DateFormat("yyyyMMdd");
         _periodTimestampFormatter = DateFormat("yyyyMMddT000000");
+        _periodRotationCheckDuration = Duration(days: 7);
         break;
-      case RotationPeriod.month:
-        _timestampFormatter = DateFormat("yyyyMM");
-        _periodTimestampFormatter = DateFormat("yyyyMM01T000000");
-        break;
+    }
+
+    _outputFile = File(_fileNameForRotation(0));
+    if (!_outputFile.parent.existsSync()) {
+      throw StateError(
+          'When initializing file logger, ${_outputFile.parent} must exist.');
     }
 
     _maybeRotate();
@@ -87,6 +90,7 @@ class RotatingFileAppender extends BaseLogAppender {
   Timer? _closeAndFlushTimer;
   DateFormat? _timestampFormatter;
   DateFormat? _periodTimestampFormatter;
+  Duration? _periodRotationCheckDuration;
 
   /// Returns all available rotated logs, starting from the most current one.
   List<File> getAllLogFiles() =>
@@ -152,7 +156,11 @@ class RotatingFileAppender extends BaseLogAppender {
     try {
       try {
         final length = await File(_outputFile.path).length();
-        if (length < rotateAtSizeBytes) {
+        if (length < rotateAtSizeBytes &&
+            rotateEvery == RotationPeriod.disabled) {
+          return false;
+        } else if (rotateEvery != RotationPeriod.disabled &&
+            _outputFile.path == _fileNameForRotation(0)) {
           return false;
         }
       } on FileSystemException catch (_) {
@@ -164,6 +172,13 @@ class RotatingFileAppender extends BaseLogAppender {
       }
 
       Future<void>? flushFuture;
+
+      if (rotateEvery != RotationPeriod.disabled &&
+          _outputFile.path != _fileNameForRotation(0)) {
+        await _closeAndFlush();
+        _outputFile = _outputFile = File(_fileNameForRotation(0));
+      }
+
       for (var i = keepRotateCount - 1; i >= 0; i--) {
         final file = File(_fileNameForRotation(i));
         if (file.existsSync()) {
@@ -188,8 +203,12 @@ class RotatingFileAppender extends BaseLogAppender {
       await flushFuture;
       return true;
     } finally {
-      var nextRotationPeriodCheck = DateTime.tryParse(
-          _periodTimestampFormatter?.format(clock.now()) ?? "");
+      var nextRotationPeriodCheck = rotateEvery != RotationPeriod.disabled &&
+              _periodRotationCheckDuration != null
+          ? DateTime.tryParse(
+                  _periodTimestampFormatter?.format(clock.now()) ?? "")
+              ?.add(_periodRotationCheckDuration!)
+          : null;
       _nextRotateCheck = clock.now().add(rotateCheckInterval);
 
       if (_nextRotateCheck != null &&
