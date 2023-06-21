@@ -8,6 +8,7 @@ import 'package:logging_appenders/src/base_appender.dart';
 import 'package:logging_appenders/src/internal/dummy_logger.dart';
 import 'package:logging_appenders/src/logrecord_formatter.dart';
 import 'package:meta/meta.dart';
+import 'package:path/path.dart' as path;
 
 enum RotationPeriod { minute, hour, day, week, disabled }
 
@@ -59,8 +60,6 @@ class RotatingFileAppender extends BaseLogAppender {
       throw StateError(
           'When initializing file logger, ${_outputFile.parent} must exist.');
     }
-
-    _maybeRotate();
   }
 
   @visibleForTesting
@@ -177,6 +176,21 @@ class RotatingFileAppender extends BaseLogAppender {
           _outputFile.path != _fileNameForRotation(0)) {
         await _closeAndFlush();
         _outputFile = _outputFile = File(_fileNameForRotation(0));
+
+        // apply retention rule
+        var directory =
+            (await Directory(path.dirname(baseFilePath)).list().toList())
+                .whereType<File>()
+                .where((f) => f.uri.toFilePath().contains(baseFilePath))
+                .toList();
+        directory.sort(
+            (a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()));
+
+        if (directory.length > keepRotateCount) {
+          for (var file in directory.skip(keepRotateCount - 1)) {
+            await file.delete();
+          }
+        }
       }
 
       for (var i = keepRotateCount - 1; i >= 0; i--) {
